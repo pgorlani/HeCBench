@@ -40,9 +40,9 @@ long get_time() {
 
 // This is a kernel that does no real work but runs at least for a specified
 // number
-void clock_block(long *d_o, long clock_count) {
-  long clock_offset = 0;
-  for (int i = 0; i < clock_count; i++)
+void clock_block(long init, long *d_o, long clock_count) {
+  long clock_offset = init;
+  for (long i = 0; i < clock_count; i++)
     clock_offset += i % 3;
   d_o[0] = clock_offset;
 }
@@ -89,6 +89,16 @@ int main(int argc, char **argv) {
 
   printf("[%s] - Starting...\n", argv[0]);
 
+  std::srand(1);
+  int array[nkernels];
+  std::vector<sycl::buffer<int,1>> input_buffer_vec;
+  std::vector<long> stored_time_clocks_kern(nkernels);
+  for(int i=0; i<nkernels; ++i)
+  {
+    array[i] = i;
+    input_buffer_vec.emplace_back(&array[i], sycl::range<1>(1));
+  }
+
   long start = get_time();
 
   // kernel events
@@ -103,17 +113,23 @@ int main(int argc, char **argv) {
   // time execution with nkernels streams
   long total_clocks = 0;
   unsigned clock_rate = 1e3 * q.get_device().get_info<sycl::info::device::max_clock_frequency>();
-  long time_clocks = (long)(kernel_time * clock_rate);
+  long time_clocks = (long)(kernel_time * clock_rate)/(99*3);
+  time_clocks *= 3;
 
   printf("time clocks = %ld\n", time_clocks);
+
 
   // queue nkernels with events recorded
   sycl::range<1> gws (1);
   sycl::range<1> lws (1);
   for (int i = 0; i < nkernels; ++i) {
+    long time_clocks_kern = time_clocks*(std::rand()%100);
+    stored_time_clocks_kern[i] = time_clocks_kern; 
     e[i] = q.submit([&](sycl::handler &cgh) {
+      //if(i>128) cgh.depends_on(e[i - 1 - std::rand()%128]);
+      auto input = input_buffer_vec[i].get_access<sycl::access_mode::read>(cgh);
       cgh.parallel_for(sycl::nd_range<1>(gws, lws), [=](sycl::nd_item<1> item) {
-        clock_block(d_a+i, time_clocks);
+        clock_block(input[0], d_a+i, time_clocks_kern);
       });
     });
     total_clocks += time_clocks;
@@ -140,9 +156,13 @@ int main(int argc, char **argv) {
   printf("Measured time for sample = %.3fs\n", (end-start) / 1e6f);
 
   // check the result
-  long sum = 0;
-  for (int i = 0; i < time_clocks; i++) sum += i % 3;
-  printf("%s\n", a[0] == nkernels * sum ? "PASS" : "FAIL");
+  long total_sum = 0;
+
+  for (int i = 0; i < nkernels; ++i)
+    total_sum += stored_time_clocks_kern[i] + array[i];
+
+  std::cout<<a[0]<<" "<<total_sum<<std::endl;
+  printf("%s\n", a[0] == total_sum ? "PASS" : "FAIL");
 
   sycl::free(a, q);
   sycl::free(d_a, q);
