@@ -29,6 +29,7 @@
 #include <stdlib.h>
 #include <sys/time.h>
 #include <vector>
+#include <thread>
 #include "common.h"
 
 
@@ -122,7 +123,8 @@ int main(int argc, char **argv) {
   // queue nkernels with events recorded
   sycl::range<1> gws (1);
   sycl::range<1> lws (1);
-  for (int i = 0; i < nkernels; ++i) {
+
+  auto f = ([&](int i){
     long time_clocks_kern = time_clocks*(std::rand()%100);
     stored_time_clocks_kern[i] = time_clocks_kern; 
     e[i] = q.submit([&](sycl::handler &cgh) {
@@ -131,9 +133,16 @@ int main(int argc, char **argv) {
       cgh.parallel_for(sycl::nd_range<1>(gws, lws), [=](sycl::nd_item<1> item) {
         clock_block(input[0], d_a+i, time_clocks_kern);
       });
-    });
+    });});
+
+  std::vector<std::thread> vt;
+  for (int i = 0; i < nkernels; ++i) {
+    vt.emplace_back(f, i);
     total_clocks += time_clocks;
   }
+
+  for (int i = 0; i < nkernels; ++i)
+    vt[i].join();
 
   // queue a sum kernel and a copy back to host 
   sycl::range<1> gws2 (32);
